@@ -1,0 +1,71 @@
+pipeline {
+    agent any
+
+    // Trigger : automatique sur push dev (via webhook)
+    triggers {
+        githubPush()  // Déclenche sur push GitHub
+    }
+
+    environment {
+        SLACK_CHANNEL = '#jenkins-cm'
+        APP_NAME = 'flask-app'
+        IMAGE_TAG = "v${BUILD_NUMBER}"
+    }
+
+    stages {
+        // STAGE 1 : Clone
+        stage('Clone') {
+            steps {
+                echo 'Clonage du code...'
+                checkout scmGit(
+                    branches: [[name: 'dev']],
+                    userRemoteConfigs: [[url: 'https://github.com/ton-user/mon-projet.git']]
+                )
+            }
+            post {
+                success { notifySlack("Clone OK", "good") }
+                failure { notifySlack("Clone ÉCHOUÉ", "danger") }
+            }
+        }
+
+        // STAGE 2 : Build
+        stage('Build') {
+            steps {
+                echo 'Construction de l\'image Docker...'
+                sh "docker build -t ${APP_NAME}:${IMAGE_TAG} ."
+            }
+            post {
+                success { notifySlack("Build OK → ${IMAGE_TAG}", "good") }
+                failure { notifySlack("Build ÉCHOUÉ", "danger") }
+            }
+        }
+
+        // STAGE 3 : Deploy
+        stage('Deploy') {
+            steps {
+                echo 'Déploiement local...'
+                sh '''
+                docker stop ${APP_NAME} || true
+                docker rm ${APP_NAME} || true
+                docker run -d --name ${APP_NAME} -p 5000:5000 ${APP_NAME}:${IMAGE_TAG}
+                '''
+            }
+            post {
+                success { 
+                    notifySlack("Deploy OK → http://localhost:5000", "good")
+                    notifySlack("Pipeline COMPLET !", "good")
+                }
+                failure { notifySlack("Deploy ÉCHOUÉ", "danger") }
+            }
+        }
+    }
+}
+
+// Fonction Slack réutilisable
+def notifySlack(message, color) {
+    slackSend(
+        channel: env.SLACK_CHANNEL,
+        color: color,
+        message: "*${env.JOB_NAME}* #${env.BUILD_NUMBER} | *${currentBuild.result ?: 'EN COURS'}* | ${message}\n> Branche: `dev` | <${env.BUILD_URL}|Voir les logs>"
+    )
+}
