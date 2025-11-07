@@ -1,11 +1,6 @@
 pipeline {
     agent any
-
-    // Trigger : automatique sur push dev (via webhook)
-    triggers {
-        githubPush()  // Déclenche sur push GitHub
-    }
-
+    triggers { githubPush() }
     environment {
         SLACK_CHANNEL = '#jenkins-cm'
         APP_NAME = 'flask-app'
@@ -13,59 +8,77 @@ pipeline {
     }
 
     stages {
-        // STAGE 1 : Clone
         stage('Clone') {
             steps {
                 echo 'Clonage du code...'
                 checkout scmGit(
                     branches: [[name: 'dev']],
-                    userRemoteConfigs: [[url: 'https://github.com/ton-user/mon-projet.git']]
+                    userRemoteConfigs: [[url: 'https://github.com/NodemBrice/pipeline.git']]
                 )
             }
             post {
-                success { notifySlack("Clone OK", "good") }
-                failure { notifySlack("Clone ÉCHOUÉ", "danger") }
+                always {
+                    echo "POST: Tentative d'envoi Slack pour Clone..."
+                    try {
+                        notifySlack("Clone terminé", "good")
+                    } catch (err) {
+                        echo "SLACK ERROR: ${err}"
+                    }
+                }
             }
         }
 
-        // STAGE 2 : Build
         stage('Build') {
             steps {
                 echo 'Construction de l\'image Docker...'
                 sh "docker build -t ${APP_NAME}:${IMAGE_TAG} ."
             }
             post {
-                success { notifySlack("Build OK → ${IMAGE_TAG}", "good") }
-                failure { notifySlack("Build ÉCHOUÉ", "danger") }
+                always {
+                    echo "POST: Tentative d'envoi Slack pour Build..."
+                    try {
+                        notifySlack("Build OK → ${IMAGE_TAG}", "good")
+                    } catch (err) {
+                        echo "SLACK ERROR: ${err}"
+                    }
+                }
             }
         }
 
-        // STAGE 3 : Deploy
         stage('Deploy') {
             steps {
-                echo 'Déploiement local...'
-                sh '''
+                echo 'Déploiement...'
+                sh """
                 docker stop ${APP_NAME} || true
                 docker rm ${APP_NAME} || true
                 docker run -d --name ${APP_NAME} -p 5000:5000 ${APP_NAME}:${IMAGE_TAG}
-                '''
+                """
             }
             post {
-                success { 
-                    notifySlack("Deploy OK → http://localhost:5000", "good")
-                    notifySlack("Pipeline COMPLET !", "good")
+                always {
+                    echo "POST: Tentative d'envoi Slack pour Deploy..."
+                    try {
+                        notifySlack("Deploy OK → http://localhost:5000", "good")
+                        notifySlack("Pipeline COMPLET !", "good")
+                    } catch (err) {
+                        echo "SLACK ERROR: ${err}"
+                    }
                 }
-                failure { notifySlack("Deploy ÉCHOUÉ", "danger") }
             }
+        }
+    }
+
+    post {
+        always {
+            echo "Pipeline terminé. Build #${BUILD_NUMBER}"
         }
     }
 }
 
-// Fonction Slack réutilisable
 def notifySlack(message, color) {
     slackSend(
         channel: env.SLACK_CHANNEL,
         color: color,
-        message: "*${env.JOB_NAME}* #${env.BUILD_NUMBER} | *${currentBuild.result ?: 'EN COURS'}* | ${message}\n> Branche: `dev` | <${env.BUILD_URL}|Voir les logs>"
+        message: "*${env.JOB_NAME}* #${env.BUILD_NUMBER} | ${message}\n> Branche: `dev` | <${env.BUILD_URL}|Logs>"
     )
 }
